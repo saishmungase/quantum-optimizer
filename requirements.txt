@@ -4,4 +4,4 @@ numpy
 qiskit
 qiskit-aer
 pydantic
-gunicorn
+uvicorn
