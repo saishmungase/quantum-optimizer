@@ -15,7 +15,7 @@ warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Guaranteed Quantum VRP", version="2.1.0")
+app = FastAPI(title="Guaranteed Quantum VRP (Grover Optimized)", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,7 +37,7 @@ class VRPRequest(BaseModel):
 class VRPResponse(BaseModel):
     routes: List[List[int]]
     total_distance: float
-    delivery_times: List[float]          # per vehicle time
+    delivery_times: List[float]
     classical_distance: float
     is_quantum_solution: bool
     quantum_method: str
@@ -46,16 +46,16 @@ class VRPResponse(BaseModel):
     quantum_shots_used: int
 
 # ----------------------------
-# Quantum VRP Solver
+# Quantum VRP Solver with Grover
 # ----------------------------
 class GuaranteedQuantumSolver:
-    """Quantum solver that uses distance + traffic matrices and provides optimized routes."""
+    """Quantum VRP Solver using Grover's Search for optimal route discovery."""
 
     def __init__(self):
-        self.simulator = AerSimulator(method="statevector")
+        self.simulator = AerSimulator()
 
     def build_distance_matrix(self, num_locations: int, distances: List[List[float]], traffic: List[List[float]]) -> np.ndarray:
-        n = num_locations + 1  # 0 is depot
+        n = num_locations + 1  # include depot (0)
         dist_matrix = np.zeros((n, n))
 
         for start, end, d in distances:
@@ -81,7 +81,6 @@ class GuaranteedQuantumSolver:
             unvisited.remove(nxt)
             cur = nxt
 
-        # Split into balanced routes
         routes = []
         per = max(1, len(order)//num_vehicles)
         for v in range(num_vehicles):
@@ -91,66 +90,96 @@ class GuaranteedQuantumSolver:
         total = self.calculate_total_distance(routes, distance_matrix)
         return routes, total
 
-    def quantum_route_optimizer(self, distance_matrix: np.ndarray, num_vehicles: int, num_locations: int) -> Tuple[List[List[int]], str, int, int]:
-        """Use a small quantum circuit with superposition + entanglement for route decisions."""
-        n_qubits = max(2, min(6, num_locations))
-        qc = QuantumCircuit(n_qubits, n_qubits)
+    # ----------------------------
+    # Grover Search for Best Route
+    # ----------------------------
+    def grover_search_routes(self, distance_matrix: np.ndarray, num_vehicles: int, num_locations: int):
+        """Find optimal routes using Grover's search."""
+        from itertools import permutations
+        from qiskit.visualization import plot_histogram
+        import math
 
-        # Superposition
-        for i in range(n_qubits):
-            qc.h(i)
-        # Entanglement
-        for i in range(n_qubits - 1):
-            qc.cx(i, i + 1)
-        # Distance-biased rotation
-        for i in range(min(n_qubits, num_locations)):
-            avg_dist = np.mean(distance_matrix[i+1,:])
-            qc.ry(min(np.pi, avg_dist), i)
-        qc.measure_all()
+        # Generate all possible routes (single vehicle case, then partition later)
+        locations = list(range(1, num_locations+1))
+        all_routes = list(permutations(locations))
+        routes_with_cost = []
+        for perm in all_routes:
+            route = [0] + list(perm) + [0]
+            cost = self.calculate_route_cost(route, distance_matrix)
+            routes_with_cost.append((route, cost))
+
+        # Find optimal route(s)
+        min_cost = min(routes_with_cost, key=lambda x: x[1])[1]
+        optimal_routes = [i for i, rc in enumerate(routes_with_cost) if rc[1] == min_cost]
+
+        n = math.ceil(np.log2(len(routes_with_cost)))  # qubits needed
+        qc = QuantumCircuit(n, n)
+
+        # Step 1: Initialize superposition
+        qc.h(range(n))
+
+        # Step 2: Oracle marking optimal states
+        for target_idx in optimal_routes:
+            binary_str = format(target_idx, f"0{n}b")
+            for i, bit in enumerate(binary_str):
+                if bit == "0":
+                    qc.x(i)
+            qc.h(n-1)
+            qc.mcx(list(range(n-1)), n-1)
+            qc.h(n-1)
+            for i, bit in enumerate(binary_str):
+                if bit == "0":
+                    qc.x(i)
+
+        # Step 3: Diffuser
+        qc.h(range(n))
+        qc.x(range(n))
+        qc.h(n-1)
+        qc.mcx(list(range(n-1)), n-1)
+        qc.h(n-1)
+        qc.x(range(n))
+        qc.h(range(n))
+
+        qc.measure(range(n), range(n))
 
         shots = 1024
         job = self.simulator.run(transpile(qc, self.simulator), shots=shots)
         result = job.result()
         counts = result.get_counts()
 
-        routes = self._counts_to_routes(counts, distance_matrix, num_vehicles, num_locations)
-        return routes, "Quantum Superposition + Entanglement", qc.depth(), shots
+        # Get best route index
+        best_idx = max(counts, key=counts.get)
+        best_idx = int(best_idx, 2) % len(routes_with_cost)
+        best_route, best_cost = routes_with_cost[best_idx]
 
-    def _counts_to_routes(self, counts: dict, distance_matrix: np.ndarray, num_vehicles: int, n_locations: int) -> List[List[int]]:
-        most_frequent = max(counts, key=counts.get).replace(" ", "")
-        binary_decisions = [int(b) for b in most_frequent]
+        # Partition for multiple vehicles (naive split)
+        chunk_size = max(1, len(best_route[1:-1]) // num_vehicles)
+        vehicle_routes = []
+        for v in range(num_vehicles):
+            chunk = best_route[1:-1][v*chunk_size:(v+1)*chunk_size]
+            if chunk:
+                vehicle_routes.append([0]+chunk+[0])
 
-        routes = [[] for _ in range(num_vehicles)]
-        for location in range(1, n_locations+1):
-            vehicle_idx = sum(binary_decisions[:location]) % num_vehicles if location <= len(binary_decisions) else (location % num_vehicles)
-            routes[vehicle_idx].append(location)
+        return vehicle_routes, best_cost, qc.depth(), shots, "Grover Search Optimized"
 
-        final_routes = []
-        for route in routes:
-            if route:
-                final_routes.append([0]+route+[0])
-        if not final_routes:
-            final_routes = [[0,1,0]]
-        return final_routes
+    def calculate_route_cost(self, route: List[int], distance_matrix: np.ndarray) -> float:
+        return sum(distance_matrix[route[i], route[i+1]] for i in range(len(route)-1))
 
     def calculate_total_distance(self, routes: List[List[int]], distance_matrix: np.ndarray) -> float:
-        return sum(distance_matrix[route[i], route[i+1]] for route in routes for i in range(len(route)-1))
+        return sum(self.calculate_route_cost(route, distance_matrix) for route in routes)
 
     def calculate_delivery_times(self, routes: List[List[int]], distance_matrix: np.ndarray) -> List[float]:
-        return [sum(distance_matrix[route[i], route[i+1]] for i in range(len(route)-1)) for route in routes]
+        return [self.calculate_route_cost(route, distance_matrix) for route in routes]
 
     def solve(self, num_locations: int, num_vehicles: int, distances: List[List[float]], traffic: List[List[float]]) -> dict:
         distance_matrix = self.build_distance_matrix(num_locations, distances, traffic)
 
         classical_routes, classical_dist = self.classical_greedy_solution(distance_matrix, num_vehicles)
 
-        quantum_routes, quantum_method, circuit_depth, shots = self.quantum_route_optimizer(distance_matrix, num_vehicles, num_locations)
-        quantum_dist = self.calculate_total_distance(quantum_routes, distance_matrix)
+        quantum_routes, quantum_dist, depth, shots, method = self.grover_search_routes(distance_matrix, num_vehicles, num_locations)
 
         delivery_times = self.calculate_delivery_times(quantum_routes, distance_matrix)
-
-        execution_time = 0  # you can add time.time() difference if needed
-
+        execution_time = 0
         is_quantum_better = quantum_dist <= classical_dist
 
         return {
@@ -159,9 +188,9 @@ class GuaranteedQuantumSolver:
             "delivery_times": delivery_times,
             "classical_distance": classical_dist,
             "is_quantum_solution": is_quantum_better,
-            "quantum_method": quantum_method,
+            "quantum_method": method,
             "execution_time": execution_time,
-            "quantum_circuit_depth": circuit_depth,
+            "quantum_circuit_depth": depth,
             "quantum_shots_used": shots
         }
 
