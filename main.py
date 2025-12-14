@@ -2,6 +2,7 @@ import logging
 import numpy as np
 import math
 import random
+import time
 from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -106,6 +107,7 @@ class QuantumModel:
                     matrix[i][j] = base_dist * penalty
                     
         return matrix
+
     def solve(self, locations: List[Location], k_vehicles: int, traffic: str = "normal") -> OptimizationResponse:
         start_time = time.time()
         matrix = self.calculate_distance_matrix(locations, traffic)
@@ -272,7 +274,7 @@ def home():
 @app.post("/api/optimize", response_model=OptimizationResponse)
 def optimize_route(request: OptimizationRequest):
     logger.info(f"Processing request for {len(request.locations)} locations")
-    return solver.solve(request.locations, request.num_vehicles)
+    return solver.solve(request.locations, request.num_vehicles, request.traffic_intensity)
 
 if __name__ == "__main__":
     import uvicorn
