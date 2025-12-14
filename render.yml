@@ -3,5 +3,5 @@ services:
     name: quantum-vrp
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --workers=2 --threads=4 --bind 0.0.0.0:$PORT
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
     plan: free
