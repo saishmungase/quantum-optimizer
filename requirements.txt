@@ -1,7 +1,8 @@
 fastapi
 uvicorn
 numpy
-qiskit
+qiskit>=1.0.0
 qiskit-aer
+qiskit-algorithms
+qiskit-optimization
 pydantic
-uvicorn
