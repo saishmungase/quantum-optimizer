@@ -75,6 +75,13 @@ class QuantumModel:
         qc.measure(0, 0)
         return transpile(qc, self.simulator)
 
+    def get_batched_quantum_entropy(self, count: int) -> List[float]:
+        # Run all shots at once
+        job = self.simulator.run(self.rng_circuit, shots=count, memory=True)
+        result = job.result()
+        memory = result.get_memory() # Returns list of ['1', '0', '1', ...]
+        # Convert bits to normalized floats (adding tiny noise to avoid 0.0/1.0 hard locks)
+        return [int(bit) * 0.99 + 0.01 for bit in memory]
     def get_quantum_entropy(self) -> float:
         job = self.simulator.run(self.rng_circuit, shots=8, memory=True)
         bits = "".join(job.result().get_memory())
@@ -173,16 +180,18 @@ class QuantumModel:
         best_cost = current_cost
         
         temp = 100.0
-        
-        for _ in range(600): 
+        iterations = 600
+        q_random_values = self.get_batched_quantum_entropy(iterations)
+        for i in range(iterations): 
             new_sol = list(current_sol)
-            i, j = random.sample(range(1, n), 2)
-            new_sol[i], new_sol[j] = new_sol[j], new_sol[i]
+            if n > 2:
+                idx1, idx2 = random.sample(range(1, n), 2)
+                new_sol[idx1], new_sol[idx2] = new_sol[idx2], new_sol[idx1]
             
             new_cost = self._balanced_cost(new_sol, matrix, k)
             delta = new_cost - current_cost
             
-            q_rand = self.get_quantum_entropy()
+            q_rand = q_random_values[i]
             
             if delta < 0 or q_rand < math.exp(-delta / temp):
                 current_sol = new_sol
