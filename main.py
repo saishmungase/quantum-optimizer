@@ -118,7 +118,8 @@ class QuantumModel:
         is_q = False
         meta = {}
 
-        if n <= 4:
+        """ Add the n < 4 for local demo"""
+        if False: 
             try:
                 logger.info("Attempting Layer 1: QAOA...")
                 routes_indices = self._run_qaoa(matrix, k_vehicles)
